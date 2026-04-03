@@ -1,0 +1,7 @@
+litert-lm>=0.10.1
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=14.0
+kokoro-onnx>=0.5.0
+numpy>=2.0.0
+soundfile>=0.13.0

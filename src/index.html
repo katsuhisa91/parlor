@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemma 4 Live Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .status {
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: #1a1a1a;
+  }
+  header .status.connected { color: #4ade80; }
+  header .status.disconnected { color: #f87171; }
+  header .status.processing { color: #facc15; }
+
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+  .video-panel {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    position: relative;
+  }
+  video {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+    background: #111;
+  }
+  .record-indicator {
+    position: absolute;
+    top: 36px;
+    left: 36px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .record-indicator.active { opacity: 1; }
+  .record-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #f87171;
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .chat-panel {
+    width: 400px;
+    border-left: 1px solid #222;
+    display: flex;
+    flex-direction: column;
+  }
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg {
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.5;
+    max-width: 90%;
+  }
+  .msg.user {
+    background: #1e3a5f;
+    align-self: flex-end;
+    color: #c0d8f0;
+  }
+  .msg.assistant {
+    background: #1a1a2e;
+    align-self: flex-start;
+    color: #d0d0e8;
+  }
+  .msg .meta {
+    font-size: 11px;
+    color: #666;
+    margin-top: 4px;
+  }
+
+  .controls {
+    padding: 16px 24px;
+    border-top: 1px solid #222;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  #talkBtn {
+    background: #2563eb;
+    color: white;
+    flex: 1;
+  }
+  #talkBtn:hover { background: #1d4ed8; }
+  #talkBtn:active, #talkBtn.recording { background: #dc2626; }
+  #talkBtn:disabled { background: #333; color: #666; cursor: not-allowed; }
+  .toggle {
+    background: #1a1a1a;
+    color: #aaa;
+    padding: 10px 14px;
+  }
+  .toggle.active { background: #1a3a1a; color: #4ade80; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Gemma 4 Live</h1>
+  <span id="status" class="status disconnected">Disconnected</span>
+</header>
+
+<div class="main">
+  <div class="video-panel">
+    <video id="video" autoplay muted playsinline></video>
+    <div id="recordIndicator" class="record-indicator">
+      <div class="record-dot"></div>
+      <span>Listening...</span>
+    </div>
+  </div>
+
+  <div class="chat-panel">
+    <div id="messages" class="messages"></div>
+    <div class="controls">
+      <button id="talkBtn" disabled>Hold to Talk</button>
+      <button id="cameraToggle" class="toggle active">Camera</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const talkBtn = document.getElementById('talkBtn');
+const cameraToggle = document.getElementById('cameraToggle');
+const messagesDiv = document.getElementById('messages');
+const statusEl = document.getElementById('status');
+const recordIndicator = document.getElementById('recordIndicator');
+
+let ws = null;
+let mediaStream = null;
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let cameraEnabled = true;
+let recordingAudioContext = null;
+let playbackAudioContext = null;
+let currentAudioSource = null;
+
+// -- WebSocket --
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {
+    statusEl.textContent = 'Connected';
+    statusEl.className = 'status connected';
+    talkBtn.disabled = false;
+  };
+  ws.onclose = () => {
+    statusEl.textContent = 'Disconnected';
+    statusEl.className = 'status disconnected';
+    talkBtn.disabled = true;
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'text') {
+      addMessage('assistant', msg.text, `LLM: ${msg.llm_time}s`);
+    } else if (msg.type === 'audio') {
+      playAudio(msg.audio, msg.tts_time);
+    }
+  };
+}
+
+// -- Camera --
+async function startCamera() {
+  // Try video + audio together
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+      audio: true,
+    });
+    video.srcObject = mediaStream;
+    addMessage('assistant', 'Camera and mic ready.', '');
+    return;
+  } catch (e) {
+    console.warn('Video+audio failed:', e.message);
+  }
+
+  // Try them separately and combine
+  let videoStream = null;
+  let audioStream = null;
+
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+    });
+  } catch (e) {
+    console.warn('Video failed:', e.message);
+  }
+
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    console.warn('Audio failed:', e.message);
+  }
+
+  // Combine available tracks
+  mediaStream = new MediaStream();
+  if (videoStream) {
+    videoStream.getVideoTracks().forEach(t => mediaStream.addTrack(t));
+    video.srcObject = mediaStream;
+  }
+  if (audioStream) {
+    audioStream.getAudioTracks().forEach(t => mediaStream.addTrack(t));
+  }
+
+  const hasVideo = mediaStream.getVideoTracks().length > 0;
+  const hasAudio = mediaStream.getAudioTracks().length > 0;
+
+  if (hasVideo && hasAudio) {
+    addMessage('assistant', 'Camera and mic ready.', '');
+  } else if (hasAudio) {
+    addMessage('assistant', 'Mic ready. Camera unavailable — audio-only mode.', '');
+    cameraEnabled = false;
+    cameraToggle.classList.remove('active');
+    cameraToggle.textContent = 'No Camera';
+    video.style.opacity = 0.3;
+  } else if (hasVideo) {
+    addMessage('assistant', 'Camera ready. Mic unavailable — camera-only mode.', '');
+  } else {
+    addMessage('assistant', 'No camera or mic available. Check permissions.', '');
+  }
+}
+
+function captureFrame() {
+  if (!cameraEnabled || !video.videoWidth) return null;
+  const canvas = document.createElement('canvas');
+  // Resize to 320px wide for speed
+  const scale = 320 / video.videoWidth;
+  canvas.width = 320;
+  canvas.height = video.videoHeight * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  // Get JPEG as base64 (strip data:image/jpeg;base64, prefix)
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+  return dataUrl.split(',')[1];
+}
+
+// -- Audio Recording --
+function startRecording() {
+  if (!mediaStream) return;
+
+  // Ensure playback AudioContext is created/resumed during user gesture
+  // (browsers block AudioContext.play outside of user interactions)
+  if (!playbackAudioContext) playbackAudioContext = new AudioContext();
+  if (playbackAudioContext.state === 'suspended') playbackAudioContext.resume();
+
+  audioChunks = [];
+
+  // Use audio tracks only
+  const audioStream = new MediaStream(mediaStream.getAudioTracks());
+  mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm;codecs=opus' });
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) audioChunks.push(e.data);
+  };
+
+  mediaRecorder.onstop = async () => {
+    const blob = new Blob(audioChunks, { type: 'audio/webm' });
+    // Convert to WAV via AudioContext
+    const wavBase64 = await webmToWavBase64(blob);
+    sendMessage(wavBase64, captureFrame());
+  };
+
+  mediaRecorder.start(100); // collect chunks every 100ms
+  isRecording = true;
+  talkBtn.classList.add('recording');
+  talkBtn.textContent = 'Recording...';
+  recordIndicator.classList.add('active');
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  isRecording = false;
+  talkBtn.classList.remove('recording');
+  talkBtn.textContent = 'Hold to Talk';
+  recordIndicator.classList.remove('active');
+}
+
+async function webmToWavBase64(blob) {
+  // Decode webm to PCM using AudioContext
+  if (!recordingAudioContext) recordingAudioContext = new AudioContext({ sampleRate: 16000 });
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioBuffer = await recordingAudioContext.decodeAudioData(arrayBuffer);
+
+  // Get mono channel, resample to 16kHz
+  const pcmData = audioBuffer.getChannelData(0);
+  // If sample rate differs, resample
+  let samples;
+  if (audioBuffer.sampleRate !== 16000) {
+    const ratio = 16000 / audioBuffer.sampleRate;
+    const newLength = Math.round(pcmData.length * ratio);
+    samples = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      const srcIdx = i / ratio;
+      const idx = Math.floor(srcIdx);
+      const frac = srcIdx - idx;
+      samples[i] = idx + 1 < pcmData.length
+        ? pcmData[idx] * (1 - frac) + pcmData[idx + 1] * frac
+        : pcmData[idx];
+    }
+  } else {
+    samples = pcmData;
+  }
+
+  // Encode to WAV
+  const wavBuffer = encodeWAV(samples, 16000);
+  // Convert to base64
+  const bytes = new Uint8Array(wavBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  function writeString(offset, string) {
+    for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return buffer;
+}
+
+// -- Send to server --
+function sendMessage(audioBase64, imageBase64) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  statusEl.textContent = 'Processing...';
+  statusEl.className = 'status processing';
+  talkBtn.disabled = true;
+
+  const payload = {};
+  if (audioBase64) payload.audio = audioBase64;
+  if (imageBase64) payload.image = imageBase64;
+
+  addMessage('user', audioBase64 ? '(voice message)' : '(camera only)',
+    imageBase64 ? 'with camera' : '');
+
+  ws.send(JSON.stringify(payload));
+}
+
+// -- Play TTS audio --
+async function playAudio(base64Wav, ttsTime) {
+  console.log(`playAudio called, base64 length: ${base64Wav.length}, ttsTime: ${ttsTime}`);
+  try {
+    // Stop any currently playing audio
+    if (currentAudioSource) {
+      try { currentAudioSource.stop(); } catch(e) {}
+    }
+
+    // Use a separate AudioContext at default sample rate for playback
+    if (!playbackAudioContext) playbackAudioContext = new AudioContext();
+    console.log(`AudioContext state: ${playbackAudioContext.state}, sampleRate: ${playbackAudioContext.sampleRate}`);
+    if (playbackAudioContext.state === 'suspended') await playbackAudioContext.resume();
+
+    const binary = atob(base64Wav);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+    // Clone the buffer since decodeAudioData detaches it
+    const arrayBuffer = bytes.buffer.slice(0);
+    const audioBuffer = await playbackAudioContext.decodeAudioData(arrayBuffer);
+    console.log(`Playing audio: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz`);
+
+    const source = playbackAudioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(playbackAudioContext.destination);
+    source.start();
+    currentAudioSource = source;
+
+    source.onended = () => {
+      statusEl.textContent = 'Connected';
+      statusEl.className = 'status connected';
+      talkBtn.disabled = false;
+    };
+
+    // Update last message with TTS time
+    const lastMeta = messagesDiv.querySelector('.msg.assistant:last-child .meta');
+    if (lastMeta) lastMeta.textContent += ` | TTS: ${ttsTime}s`;
+  } catch (e) {
+    console.error('Audio playback error:', e);
+    // Re-enable controls even if audio fails
+    statusEl.textContent = 'Connected';
+    statusEl.className = 'status connected';
+    talkBtn.disabled = false;
+  }
+}
+
+// -- UI --
+function addMessage(role, text, meta) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.innerHTML = `${text}${meta ? `<div class="meta">${meta}</div>` : ''}`;
+  messagesDiv.appendChild(div);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+// -- Events --
+talkBtn.addEventListener('mousedown', startRecording);
+talkBtn.addEventListener('mouseup', stopRecording);
+talkBtn.addEventListener('mouseleave', () => { if (isRecording) stopRecording(); });
+// Touch support
+talkBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+talkBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+
+cameraToggle.addEventListener('click', () => {
+  cameraEnabled = !cameraEnabled;
+  cameraToggle.classList.toggle('active', cameraEnabled);
+  cameraToggle.textContent = cameraEnabled ? 'Camera' : 'No Camera';
+  video.style.opacity = cameraEnabled ? 1 : 0.3;
+});
+
+// -- Init --
+startCamera().then(connect);
+</script>
+</body>
+</html>

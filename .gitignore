@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# uv
+uv.lock
+
+# Models (too large for git)
+*.onnx
+*.bin
+*.litertlm
+
+# macOS
+.DS_Store
+default.profraw
+
+# IDE
+.idea/
+.vscode/
