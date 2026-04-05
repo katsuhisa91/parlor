@@ -33,9 +33,7 @@ Browser (playback + transcript)
 - **Linux** with a supported GPU — uses ONNX for TTS (CPU)
 - ~3 GB free RAM for the Gemma 4 E2B model
 
-## Setup
-
-### 1. Install dependencies
+## Quick start
 
 ```bash
 # Install uv if you don't have it
@@ -43,44 +41,19 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 cd src
 uv sync
+uv run python server.py
 ```
 
-### 2. Download the model
+Open [http://localhost:8000](http://localhost:8000) — grant camera and microphone access, start talking.
 
-```bash
-# Install the LiteRT-LM CLI
-uv tool install litert-lm
-
-# Download Gemma 4 E2B (~2.6 GB)
-litert-lm download litert-community/gemma-4-E2B-it-litert-lm
-```
-
-This downloads `gemma-4-E2B-it.litertlm`. Note the path — you'll need it next.
-
-> **Linux only:** You also need the TTS model files. On macOS these are downloaded automatically.
-> ```bash
-> cd src
-> curl -LO https://github.com/hexgrad/Kokoro-82M/releases/download/v1.0/kokoro-v1.0.onnx
-> curl -LO https://github.com/hexgrad/Kokoro-82M/releases/download/v1.0/voices-v1.0.bin
-> ```
-
-### 3. Run
-
-```bash
-cd src
-MODEL_PATH=/path/to/gemma-4-E2B-it.litertlm uv run python server.py
-```
-
-Open [http://localhost:8000](http://localhost:8000) in your browser. Grant camera and microphone access when prompted — start talking.
+On first run, models are downloaded automatically (~2.6 GB for Gemma 4 E2B from HuggingFace, plus TTS models).
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_PATH` | (required) | Path to `gemma-4-E2B-it.litertlm` |
+| `MODEL_PATH` | auto-download from HuggingFace | Path to a local `gemma-4-E2B-it.litertlm` file |
 | `PORT` | `8000` | Server port |
-
-See [`.env.example`](.env.example) for a template.
 
 ## Performance (Apple M3 Pro)
 

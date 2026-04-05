@@ -5,7 +5,6 @@ import base64
 import json
 import os
 import re
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -18,12 +17,20 @@ from fastapi.responses import HTMLResponse
 import litert_lm
 import tts
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "")
-if not MODEL_PATH:
-    print("ERROR: MODEL_PATH environment variable is required.")
-    print("  Download the model:  litert-lm download litert-community/gemma-4-E2B-it-litert-lm")
-    print("  Then run:            MODEL_PATH=/path/to/gemma-4-E2B-it.litertlm uv run python server.py")
-    sys.exit(1)
+HF_REPO = "litert-community/gemma-4-E2B-it-litert-lm"
+HF_FILENAME = "gemma-4-E2B-it.litertlm"
+
+
+def resolve_model_path() -> str:
+    path = os.environ.get("MODEL_PATH", "")
+    if path:
+        return path
+    from huggingface_hub import hf_hub_download
+    print(f"Downloading {HF_REPO}/{HF_FILENAME} (first run only)...")
+    return hf_hub_download(repo_id=HF_REPO, filename=HF_FILENAME)
+
+
+MODEL_PATH = resolve_model_path()
 SYSTEM_PROMPT = (
     "You are a friendly, conversational AI assistant. The user is talking to you "
     "through a microphone and showing you their camera. "

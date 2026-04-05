@@ -2,9 +2,15 @@
 
 import platform
 import sys
+import urllib.request
 from pathlib import Path
 
 import numpy as np
+
+KOKORO_ONNX_FILES = {
+    "kokoro-v1.0.onnx": "https://github.com/hexgrad/Kokoro-82M/releases/download/v1.0/kokoro-v1.0.onnx",
+    "voices-v1.0.bin": "https://github.com/hexgrad/Kokoro-82M/releases/download/v1.0/voices-v1.0.bin",
+}
 
 
 def _is_apple_silicon() -> bool:
@@ -43,6 +49,12 @@ class ONNXBackend(TTSBackend):
         import kokoro_onnx
 
         tts_dir = Path(__file__).parent
+        for filename, url in KOKORO_ONNX_FILES.items():
+            path = tts_dir / filename
+            if not path.exists():
+                print(f"Downloading {filename}...")
+                urllib.request.urlretrieve(url, path)
+
         self._model = kokoro_onnx.Kokoro(
             str(tts_dir / "kokoro-v1.0.onnx"),
             str(tts_dir / "voices-v1.0.bin"),
