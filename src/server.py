@@ -21,11 +21,23 @@ import tts
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-medium-mlx-4bit")
 LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-3-4b-it-4bit")
 
+TOOLS = {
+    "get_current_time": {
+        "description": "現在の日時を取得する",
+        "fn": lambda: __import__("datetime").datetime.now().strftime("%Y年%m月%d日 %H時%M分"),
+    },
+}
+
 SYSTEM_PROMPT = (
     "あなたは親しみやすいAIアシスタントです。"
     "ユーザーはマイクを通して話しかけています。"
     "必ず日本語で返答してください。"
-    "返答は短く自然に：1〜3文で。"
+    "返答は短く自然に：1〜3文で。\n\n"
+    "## ツール\n"
+    "リアルタイム情報が必要な場合は以下のJSON形式のみで返答し、他のテキストを含めないでください:\n"
+    '{"tool_call": {"name": "<ツール名>", "arguments": {}}}\n'
+    "利用可能なツール:\n"
+    "- get_current_time: 現在の日時を返す（引数なし）\n"
 )
 
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
@@ -78,10 +90,69 @@ def _transcribe(audio: np.ndarray) -> str:
     return result["text"].strip()
 
 
-def _llm_generate(conversation: list) -> str:
+def _parse_tool_call(text: str):
+    """ツール呼び出しのJSONをテキスト内から検出して返す。なければNone。"""
+    for m in re.finditer(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text):
+        try:
+            obj = json.loads(m.group(1))
+            if "tool_call" in obj:
+                return obj["tool_call"]
+        except json.JSONDecodeError:
+            pass
+
+    for start in (m.start() for m in re.finditer(r'\{', text)):
+        depth = 0
+        for i, ch in enumerate(text[start:]):
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(text[start:start + i + 1])
+                        if "tool_call" in obj:
+                            return obj["tool_call"]
+                    except json.JSONDecodeError:
+                        pass
+                    break
+    return None
+
+
+def _execute_tool(name: str, arguments: dict) -> str:
+    if name not in TOOLS:
+        return f"エラー: ツール '{name}' は存在しません"
+    try:
+        return str(TOOLS[name]["fn"](**arguments))
+    except Exception as e:
+        return f"エラー: {e}"
+
+
+def _llm_generate_once(conversation: list) -> str:
     from mlx_lm import generate as lm_generate
     prompt = _lm_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
     return lm_generate(_lm_model, _lm_tokenizer, prompt=prompt, max_tokens=128, verbose=False).strip()
+
+
+def _llm_respond(conversation: list, max_tool_rounds: int = 3) -> str:
+    """ツール呼び出しループ付きのLLM応答。"""
+    conv = list(conversation)
+
+    for _ in range(max_tool_rounds + 1):
+        response = _llm_generate_once(conv)
+
+        tool_call = _parse_tool_call(response)
+        if tool_call is None:
+            return response
+
+        name = tool_call.get("name", "")
+        arguments = tool_call.get("arguments", {})
+        tool_result = _execute_tool(name, arguments)
+        print(f"Tool call: {name}({arguments}) → {tool_result}")
+
+        conv.append({"role": "assistant", "content": response})
+        conv.append({"role": "user", "content": f"[ツール結果: {name}] {tool_result}"})
+
+    return response
 
 
 def split_sentences(text: str) -> list:
@@ -143,7 +214,7 @@ async def websocket_endpoint(ws: WebSocket):
             t1 = time.time()
             conv_snapshot = list(conversation)
             text_response = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _llm_generate(conv_snapshot)
+                None, lambda: _llm_respond(conv_snapshot)
             )
             llm_time = time.time() - t1
             print(f"LLM ({llm_time:.2f}s): {transcription!r} → {text_response}")
