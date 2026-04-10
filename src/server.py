@@ -20,6 +20,7 @@ import tts
 
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-medium-mlx-4bit")
 LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-3-4b-it-4bit")
+VLM_MODEL = os.environ.get("VLM_MODEL", "mlx-community/Phi-3.5-vision-instruct-4bit")
 
 TOOLS = {
     "get_current_time": {
@@ -44,11 +45,14 @@ SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
 
 _lm_model = None
 _lm_tokenizer = None
+_vlm_model = None
+_vlm_processor = None
+_vlm_config = None
 _tts_backend = None
 
 
 def load_models():
-    global _lm_model, _lm_tokenizer, _tts_backend
+    global _lm_model, _lm_tokenizer, _vlm_model, _vlm_processor, _vlm_config, _tts_backend
 
     print(f"Loading Whisper ({WHISPER_MODEL})...")
     import mlx_whisper
@@ -64,7 +68,31 @@ def load_models():
     _lm_model, _lm_tokenizer = lm_load(LLM_MODEL)
     print("LLM loaded.")
 
+    print(f"Loading vision model ({VLM_MODEL})...")
+    from mlx_vlm import load as vlm_load
+    from mlx_vlm.utils import load_config as vlm_load_config
+    _vlm_model, _vlm_processor = vlm_load(VLM_MODEL)
+    _vlm_config = vlm_load_config(VLM_MODEL)
+    print("Vision model loaded.")
+
     _tts_backend = tts.load()
+
+
+def _describe_image(image_b64: str) -> str:
+    """VLMで画像を1文で日本語説明する。"""
+    from mlx_vlm import generate as vlm_generate
+    from mlx_vlm.prompt_utils import apply_chat_template
+    import base64 as _b64, io as _io
+    from PIL import Image as _PILImage
+
+    image = [_PILImage.open(_io.BytesIO(_b64.b64decode(image_b64)))]
+    prompt = apply_chat_template(
+        _vlm_processor, _vlm_config,
+        "画像に映っているものを1文で簡潔に日本語で説明してください。",
+        num_images=1,
+    )
+    result = vlm_generate(_vlm_model, _vlm_processor, prompt, image, max_tokens=64, verbose=False)
+    return (result.text if hasattr(result, "text") else str(result)).strip()
 
 
 @asynccontextmanager
@@ -127,18 +155,28 @@ def _execute_tool(name: str, arguments: dict) -> str:
         return f"エラー: {e}"
 
 
-def _llm_generate_once(conversation: list) -> str:
+def _llm_generate_once(conversation: list, image_b64: str = None) -> str:
+    """1回だけLLMを呼び出して生テキストを返す。"""
     from mlx_lm import generate as lm_generate
-    prompt = _lm_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
+
+    conv = list(conversation)
+    if image_b64:
+        description = _describe_image(image_b64)
+        print(f"Image description: {description}")
+        last = conv[-1].copy()
+        last["content"] = f"[カメラ映像: {description}]\n{last['content']}"
+        conv[-1] = last
+
+    prompt = _lm_tokenizer.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
     return lm_generate(_lm_model, _lm_tokenizer, prompt=prompt, max_tokens=128, verbose=False).strip()
 
 
-def _llm_respond(conversation: list, max_tool_rounds: int = 3) -> str:
+def _llm_respond(conversation: list, image_b64: str = None, max_tool_rounds: int = 3) -> str:
     """ツール呼び出しループ付きのLLM応答。"""
     conv = list(conversation)
 
-    for _ in range(max_tool_rounds + 1):
-        response = _llm_generate_once(conv)
+    for round_idx in range(max_tool_rounds + 1):
+        response = _llm_generate_once(conv, image_b64 if round_idx == 0 else None)
 
         tool_call = _parse_tool_call(response)
         if tool_call is None:
@@ -209,12 +247,14 @@ async def websocket_endpoint(ws: WebSocket):
             if not user_text:
                 continue
 
+            image_b64 = msg.get("image")
+
             conversation.append({"role": "user", "content": user_text})
 
             t1 = time.time()
             conv_snapshot = list(conversation)
             text_response = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _llm_respond(conv_snapshot)
+                None, lambda: _llm_respond(conv_snapshot, image_b64)
             )
             llm_time = time.time() - t1
             print(f"LLM ({llm_time:.2f}s): {transcription!r} → {text_response}")
