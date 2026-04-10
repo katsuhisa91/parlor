@@ -32,8 +32,8 @@ class MLXBackend(TTSBackend):
         # Warmup: triggers pipeline init (phonemizer, spacy, etc.)
         list(self._model.generate(text="Hello", voice="af_heart", speed=1.0))
 
-    def generate(self, text: str, voice: str = "af_heart", speed: float = 1.1) -> np.ndarray:
-        results = list(self._model.generate(text=text, voice=voice, speed=speed))
+    def generate(self, text: str, voice: str = "jf_alpha", speed: float = 1.1, lang_code: str = "j") -> np.ndarray:
+        results = list(self._model.generate(text=text, voice=voice, speed=speed, lang_code=lang_code))
         return np.concatenate([np.array(r.audio) for r in results])
 
 

@@ -22,8 +22,10 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "mlx-community/whisper-medium-ml
 LLM_MODEL = os.environ.get("LLM_MODEL", "mlx-community/gemma-3-4b-it-4bit")
 
 SYSTEM_PROMPT = (
-    "You are a friendly, conversational AI assistant. The user is talking to you through a microphone. "
-    "Keep your responses short and natural: 1-3 sentences."
+    "あなたは親しみやすいAIアシスタントです。"
+    "ユーザーはマイクを通して話しかけています。"
+    "必ず日本語で返答してください。"
+    "返答は短く自然に：1〜3文で。"
 )
 
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
@@ -72,7 +74,7 @@ def _decode_wav(wav_b64: str) -> np.ndarray:
 
 def _transcribe(audio: np.ndarray) -> str:
     import mlx_whisper
-    result = mlx_whisper.transcribe(audio, path_or_hf_repo=WHISPER_MODEL, verbose=False)
+    result = mlx_whisper.transcribe(audio, path_or_hf_repo=WHISPER_MODEL, verbose=False, language="ja")
     return result["text"].strip()
 
 
