@@ -8,20 +8,20 @@
 
 ---
 
-## 開発の経緯（裏話）
+## 経緯の記録
 
-もともと **Gemma 4** の学習用として始めたリポジトリでした。
+もともと **Gemma 4** の学習用としてフォークしたリポジトリでした。
 
 Gemma 4 は Google が2026年4月にリリースした最新マルチモーダルモデルで、
-E2B・E4B などエッジデバイス向けの小型モデルが存在します。
-元のParlor はこれを **LiteRT-LM**（サーバーサイド）で動かす構成になっていました。
+エッジデバイス向けの小型モデルが存在します。
+元のParlor はこれを **LiteRT-LM**で動かす構成になっていました。
 
 実際に動かしてみると、LiteRT-LM 自体は問題なく動いたのですが、
 Apple Silicon Mac では **GPU sampler が非対応**となって CPU フォールバックで動作し、
 応答に **60秒以上** かかる状態になりました。
 
 「もっと速くしたい」という動機から、Apple Silicon に最適化された
-**MLXバックエンド（mlx-vlm）** への切り替えを選びました。
+**MLXバックエンド** への切り替えを選びました。
 
 ところが Gemma 4 リリース直後は mlx-lm が **Gemma 4 に未対応**
 （mlx-vlm は Day-0 対応、mlx-lm は 4月8日の v0.31.2 で対応）だったため、
@@ -132,7 +132,7 @@ uv run server.py
 
 [http://localhost:8000](http://localhost:8000) を開いてカメラとマイクを許可し、話しかけてください。
 
-初回起動時にモデルが自動ダウンロードされます（合計 ~2GB）。
+初回起動時にモデルが自動ダウンロードされます。
 
 ---
 
@@ -158,10 +158,10 @@ uv run server.py
 ## Acknowledgments
 
 - [fikrikarim/parlor](https://github.com/fikrikarim/parlor) — 元のリポジトリ
-- [Gemma 4](https://ai.google.dev/gemma) by Google DeepMind
-- [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) by Blaizzy
-- [mlx-audio](https://github.com/ml-explore/mlx-audio) by Apple
-- [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) TTS by Hexgrad
+- [Gemma 4](https://ai.google.dev/gemma)
+- [mlx-vlm](https://github.com/Blaizzy/mlx-vlm)
+- [mlx-audio](https://github.com/Blaizzy/mlx-audio)
+- [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M)
 - [Silero VAD](https://github.com/snakers4/silero-vad)
 
 ## License
